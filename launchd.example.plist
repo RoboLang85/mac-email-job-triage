@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.langit.mac-email-job-triage</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>cd 'REPOSITORY_PATH' &amp;&amp; .venv/bin/triage run &amp;&amp; .venv/bin/triage digest</string>
+  </array>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>12</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>REPOSITORY_PATH/logs/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>REPOSITORY_PATH/logs/launchd.err.log</string>
+</dict>
+</plist>

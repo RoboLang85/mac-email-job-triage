@@ -1,0 +1,18 @@
+# Non-secret tuning reference. Runtime settings are read from environment/.env.
+# Copy values you want to change into .env.
+
+[apple_silicon]
+# Recommended defaults implemented by `triage model`:
+# <= 16 GB: qwen3:8b
+# <= 24 GB: qwen3:14b
+# >= 32 GB: qwen3:30b
+# gpt-oss:20b is an optional alternative and currently downloads at ~14 GB.
+max_parallel_model_calls = 1
+classify_batch_size = 4
+email_body_chars = 4000
+context_tokens = 8192
+
+[safety]
+frontier_enabled = false
+remote_only = true
+application_submission_enabled = false
