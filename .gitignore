@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Local secrets and runtime state
+.env
+.env.*
+!.env.example
+config.toml
+*.db
+*.sqlite
+*.sqlite3
+*.token_cache*
+token_cache*.json
+output/
+state/
+logs/
+*.log
+
+# User/private data
+resume_profile.md
+job_boards.json
+*.eml
+*.msg
+*.mbox
+*.pst
+*.ost
+
+# macOS / editors
+.DS_Store
+.idea/
+.vscode/
