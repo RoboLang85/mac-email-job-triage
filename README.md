@@ -1,20 +1,85 @@
 # mac-email-job-triage
 
-A local-first Python pipeline optimized for Apple Silicon:
+A local-first Python application for private email triage and remote-job discovery on Apple Silicon.
 
-`fetch -> classify -> store -> render`
+The core design is deliberately simple:
 
-The plumbing is deterministic. Ollama is used only for fuzzy classification and optional job-fit scoring. SQLite makes reruns idempotent, so messages that already have a triage decision do not consume another model pass.
+```text
+fetch -> normalize -> classify -> store -> render
+```
 
-## Safety defaults
+Python owns the workflow. Local models are used only for fuzzy tasks such as classification, summarization, and optional job-fit scoring. SQLite provides durable, idempotent state so reruns do not repeatedly process the same message or waste inference cycles.
 
-- No email sending.
-- No application submission.
-- No LinkedIn automation.
-- Frontier/cloud escalation is disabled by default.
-- Gmail/Outlook credentials and OAuth caches stay outside Git.
-- Job discovery is read-only against public Greenhouse, Lever, and Ashby job-board endpoints.
-- Remote-only gating is enabled by default; explicit hybrid/on-site postings are rejected by the deterministic job gate before model scoring.
+The project is optimized for M-series Macs and uses Ollama for local inference. It intentionally avoids agent frameworks and multi-step model tool loops.
+
+## What it does
+
+- Reads unread Gmail messages over IMAP without marking them read.
+- Reads Outlook / Outlook.com mail through Microsoft Graph delegated authentication.
+- Normalizes messages into a connector-neutral internal record.
+- Classifies email locally with structured Ollama output.
+- Stores message and triage state in SQLite for resumable, idempotent runs.
+- Generates Markdown digests from recent classifications.
+- Discovers jobs from configured Greenhouse, Lever, and Ashby boards.
+- Applies deterministic remote-only filtering before optional model scoring.
+- Scores job descriptions against a local, user-controlled professional profile.
+- Runs interactively or on a macOS `launchd` schedule.
+
+## Safety and privacy defaults
+
+This project is intentionally read-oriented.
+
+- **No email sending.**
+- **No application submission.**
+- **No LinkedIn automation.**
+- **No automatic mailbox mutation.**
+- **No cloud model use by default.**
+- Frontier/cloud escalation exists only as an optional, disabled configuration path.
+- Credentials, OAuth caches, SQLite databases, raw mail, logs, private resume data, and generated output are excluded from Git.
+- Email bodies and job descriptions are treated as untrusted input. The model is not given tools or authority to perform external actions.
+
+Review `SECURITY.md` before enabling connectors or adapting the project for a production environment.
+
+## Architecture
+
+```text
+                 +------------------+
+Gmail IMAP ----> |                  |
+                 | Message          |       +------------------+
+Outlook Graph -> | normalization    | ----> | SQLite state     |
+                 |                  |       +---------+--------+
+                 +------------------+                 |
+                                                      v
+                                             +------------------+
+                                             | Ollama           |
+                                             | classification   |
+                                             +---------+--------+
+                                                       |
+                                                       v
+                                             +------------------+
+                                             | Markdown digest  |
+                                             +------------------+
+
+Greenhouse / Lever / Ashby
+            |
+            v
++-------------------------+
+| deterministic job gate  |
+| remote-only by default  |
++------------+------------+
+             |
+             v
++-------------------------+
+| optional local fit      |
+| scoring with Ollama     |
++-------------------------+
+```
+
+### Why deterministic plumbing?
+
+The application does not ask a model to rediscover the workflow on every run. Fetching, deduplication, persistence, filtering, scheduling, and rendering are normal Python code. Models answer narrow questions only where semantic judgment is useful.
+
+That architecture reduces token use, improves repeatability, makes failures easier to diagnose, and works well with smaller local models.
 
 ## Apple Silicon model defaults
 
@@ -24,43 +89,59 @@ Run:
 triage model
 ```
 
-The built-in defaults intentionally leave headroom for macOS and Python:
+The built-in selection intentionally leaves unified-memory headroom for macOS and other applications:
 
-| Unified memory | Default |
-|---|---|
+| Unified memory | Default model |
+| --- | --- |
 | 16 GB or less | `qwen3:8b` |
 | 18-24 GB | `qwen3:14b` |
 | 32 GB+ | `qwen3:30b` |
 
-You can override the choice with `OLLAMA_MODEL=` in `.env`. `gpt-oss:20b` is also a strong local alternative, but it is substantially larger than Qwen3 8B/14B.
+Override the automatic choice with `OLLAMA_MODEL` in `.env`.
 
-## 1. Install prerequisites on macOS
+Inference concurrency is intentionally conservative because CPU, GPU, and the operating system share the same memory pool on Apple Silicon.
 
-Install Homebrew if you do not already have it, then:
+## Requirements
+
+- macOS on Apple Silicon
+- Python 3.12+
+- Ollama
+- Git
+- Gmail app password if Gmail IMAP is enabled
+- Microsoft Entra public-client application with delegated `Mail.Read` if Outlook is enabled
+
+The code may work on other platforms, but macOS/Apple Silicon is the primary target and the included bootstrap/scheduling scripts are macOS-specific.
+
+## Quick start
+
+Clone the repository:
 
 ```bash
-brew install python@3.12 git gh
+git clone https://github.com/RoboLang85/mac-email-job-triage.git
+cd mac-email-job-triage
 ```
 
-Install Ollama from the official macOS app, launch it once, and confirm:
+Install prerequisites with Homebrew if needed:
+
+```bash
+brew install python@3.12 git
+```
+
+Install and launch Ollama, then verify it is reachable:
 
 ```bash
 ollama --version
 curl http://127.0.0.1:11434/api/tags
 ```
 
-Apple Silicon GPU acceleration uses Metal automatically in Ollama; no CUDA setup is required.
-
-## 2. Bootstrap the app
-
-From the repository root:
+Bootstrap the Python environment:
 
 ```bash
-chmod +x scripts/bootstrap_macos.sh scripts/publish_to_github.sh
+chmod +x scripts/bootstrap_macos.sh scripts/preflight.sh
 ./scripts/bootstrap_macos.sh
 ```
 
-Then:
+Inspect the selected local model and pull it:
 
 ```bash
 .venv/bin/triage model
@@ -68,9 +149,19 @@ Then:
 .venv/bin/triage doctor
 ```
 
-## 3. Configure Gmail
+## Configuration
 
-Copy/edit `.env` and set:
+Copy the example environment file:
+
+```bash
+cp .env.example .env
+```
+
+Never commit `.env`.
+
+### Gmail
+
+Set:
 
 ```text
 GMAIL_ENABLED=true
@@ -78,11 +169,11 @@ GMAIL_USER=you@example.com
 GMAIL_APP_PASSWORD=your-app-password
 ```
 
-Use a Gmail app password if your account supports it. Do not use your normal Gmail password and never commit `.env`.
+Use a Gmail app password rather than your normal account password where supported.
 
-## 4. Configure personal Outlook / Outlook.com
+### Outlook / Outlook.com
 
-Register a public-client application in Microsoft Entra and enable delegated `Mail.Read`. Put only the application/client ID in `.env`:
+Register a Microsoft Entra public-client application with delegated `Mail.Read`, then set:
 
 ```text
 OUTLOOK_ENABLED=true
@@ -90,43 +181,50 @@ MS_CLIENT_ID=00000000-0000-0000-0000-000000000000
 MS_TENANT_ID=consumers
 ```
 
-The first run uses Microsoft device-code authentication. The MSAL token cache is written under `~/.mac-email-job-triage/` with owner-only permissions.
+The first run uses device-code authentication. The MSAL token cache is stored outside the repository under `~/.mac-email-job-triage/`.
 
-## 5. Run email triage
+## Run email triage
 
 ```bash
 .venv/bin/triage run
-.venv/bin/triage digest --minimum-urgency 1
 ```
 
-Only unread messages not already classified in SQLite are sent to the local Ollama model. Messages are truncated to 4,000 characters by default and classified in small batches of four to reduce model-load overhead without creating large prompts.
+Render a recent digest:
 
-## 6. Configure optional job discovery
+```bash
+.venv/bin/triage digest --minimum-urgency 1 --since-hours 24
+```
+
+By default, message bodies are truncated before inference and messages that already have a stored triage decision are not sent to the model again.
+
+## Job discovery
+
+Create local configuration files from the examples:
 
 ```bash
 cp job_boards.example.json job_boards.json
 cp resume_profile.example.md resume_profile.md
 ```
 
-Edit `job_boards.json` and enable only the boards you want to monitor. Put only verified professional facts in `resume_profile.md`.
+Enable the job boards you want to monitor and put only verified professional facts in `resume_profile.md`.
 
-Fetch listings without model scoring:
+Fetch jobs without model scoring:
 
 ```bash
 .venv/bin/triage jobs-refresh
 ```
 
-Fetch and locally score against the verified resume profile:
+Fetch jobs and perform local fit scoring:
 
 ```bash
 .venv/bin/triage jobs-refresh --score
 ```
 
-This command never submits an application.
+Job discovery is read-only. The project does not submit applications.
 
-## 7. Run automatically with launchd
+## Automated runs with launchd
 
-For a noon local-time run on macOS, create `~/Library/LaunchAgents/com.langit.mac-email-job-triage.plist` using the example in `launchd.example.plist`. Replace `REPOSITORY_PATH` with the absolute repository path, then:
+The repository includes `launchd.example.plist` for a noon local-time run.
 
 ```bash
 cp launchd.example.plist ~/Library/LaunchAgents/com.langit.mac-email-job-triage.plist
@@ -134,58 +232,67 @@ sed -i '' "s|REPOSITORY_PATH|$PWD|g" ~/Library/LaunchAgents/com.langit.mac-email
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.langit.mac-email-job-triage.plist
 ```
 
-The launchd task runs `triage run` followed by `triage digest` at 12:00 local Mac time.
+The scheduled task runs email triage followed by digest generation.
 
-## 8. Tests and publication preflight
+## Development
+
+Run the complete local preflight:
 
 ```bash
 ./scripts/preflight.sh
 ```
 
-This compiles the source, runs Ruff and pytest, and checks that common private runtime files are not tracked.
+The preflight compiles the Python source, runs linting and tests, and checks that common private runtime files are not tracked by Git.
 
-## 9. Publish to GitHub
-
-Authenticate once:
+Useful commands:
 
 ```bash
-gh auth login
+make test
+make lint
 ```
 
-Then create a private repository and push:
+## Data handling
 
-```bash
-./scripts/publish_to_github.sh mac-email-job-triage private
-```
+Runtime data should remain local. The supplied `.gitignore` excludes, among other things:
 
-Before pushing, always inspect:
+- `.env` and environment-specific configuration
+- OAuth/MSAL token caches
+- SQLite databases
+- logs and generated output
+- raw mailbox exports
+- `resume_profile.md`
+- user-specific job-board configuration
 
-```bash
-git status --short
-git diff --cached
-```
+If you extend the application, keep secrets and user data outside the repository and avoid logging message bodies or authentication material.
 
-## Architecture notes
+## Prompt-injection boundary
 
-### Why SQLite
+Email and job descriptions can contain arbitrary text, including instructions designed to manipulate an LLM. This project treats that content strictly as data.
 
-`(source, external_id)` is unique. A separate triage row records that classification has completed. If the process crashes after fetching, rerunning safely continues. If a message already has a triage decision, the model is not called for it again.
-
-### Why one local model call at a time
-
-Apple Silicon has unified memory shared by the OS, applications, CPU, and GPU. Limiting model concurrency to one avoids loading multiple inference workloads into the same memory pool and generally improves responsiveness on laptops.
-
-### Prompt-injection boundary
-
-Email and job descriptions are explicitly treated as untrusted data. The model system instructions say not to follow commands found in message bodies or postings. The application does not expose tools to the model; Python controls every external action.
-
-### Job providers
-
-The implementation uses the public read endpoints documented by Greenhouse, Lever, and Ashby. Application-submission endpoints are intentionally not implemented.
+The model does not decide what tools to invoke, does not receive mailbox credentials, and cannot directly send mail, mutate a mailbox, browse authenticated sites, or submit forms. External actions remain deterministic Python operations with explicit code paths.
 
 ## Current limitations
 
-- It does not mark mail as read, move mail, send replies, or apply labels/categories.
-- It does not yet ingest Slack or Teams messages. The normalized `MessageRecord` interface is intentionally connector-neutral so those sources can be added without changing the classifier/database/render stages.
-- It does not create tailored DOCX/PDF resumes. Keep that capability in the existing approval-gated resume/application workflow rather than mixing document generation into the mailbox reader.
-- Remote detection is conservative. If the posting is ambiguous, it is marked `unclear` rather than guessed.
+- Mail is not marked read, moved, labeled, categorized, or replied to.
+- Slack and Teams ingestion are not yet implemented, although the normalized message interface is connector-neutral.
+- Tailored DOCX/PDF resume generation is intentionally outside this repository.
+- Job-application submission is intentionally outside this repository.
+- Remote-work detection is conservative; ambiguous postings are reported as unclear rather than guessed.
+- Third-party job-board APIs and authentication requirements can change, so integrations should be revalidated before production deployment.
+
+## Roadmap
+
+Potential additions include:
+
+- Slack and Teams read-only connectors
+- richer deterministic mailbox rules
+- configurable digest destinations
+- pluggable local-model profiles
+- improved job deduplication and provenance tracking
+- optional integration with a separate approval-gated application workflow
+
+Contributions should preserve the local-first design, deterministic orchestration, explicit safety boundaries, and secret-free repository history.
+
+## License
+
+Released under the [MIT License](LICENSE).
